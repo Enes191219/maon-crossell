@@ -258,33 +258,63 @@
   }
 
   async function initCartPage() {
-    const placeholder = document.querySelector('[data-maon-crosssell="cart"]')
-      || document.querySelector('.maon-crosssell-placeholder[data-position="cart"]');
+    // Prevent duplicate widgets
+    if (document.querySelector('.maon-crosssell-widget')) return;
 
-    // Get first cart item product ID
-    const cartItems = window.Shopify?.checkout?.line_items
-      || document.querySelectorAll('[data-product-id]');
+    try {
+      // Fetch cart items from Shopify's /cart.js API
+      const cartRes = await fetch('/cart.js');
+      if (!cartRes.ok) return;
+      const cart = await cartRes.json();
 
-    const productId = cartItems?.[0]?.product_id
-      || (cartItems?.length > 0 ? cartItems[0].getAttribute('data-product-id') : null);
+      if (!cart.items || cart.items.length === 0) return;
 
-    if (!productId) return;
+      // Get unique product IDs from cart
+      const productIds = [...new Set(cart.items.map(item => String(item.product_id)))];
+      const primaryProductId = productIds[0];
 
-    const data = await fetchRecommendations(String(productId), 'cart', 2);
-    if (!data) return;
+      console.log('[Maon Crosssell] Sepet ürünleri:', productIds);
 
-    const widget = createWidget(data, 'cart', String(productId));
-    if (!widget) return;
-
-    if (placeholder) {
-      placeholder.appendChild(widget);
-    } else {
-      const cartForm = document.querySelector('form[action="/cart"]')
-        || document.querySelector('.cart-form')
-        || document.querySelector('[data-cart-form]');
-      if (cartForm) {
-        cartForm.parentNode.insertBefore(widget, cartForm);
+      const data = await fetchRecommendations(primaryProductId, 'cart', 4);
+      if (!data) {
+        console.warn('[Maon Crosssell] Öneri bulunamadı');
+        return;
       }
+
+      // Filter out products already in cart
+      if (data.products) {
+        data.products = data.products.filter(p => !productIds.includes(p.shopifyId));
+      }
+
+      const widget = createWidget(data, 'cart', primaryProductId);
+      if (!widget) return;
+
+      // Find best insertion point
+      const placeholder = document.querySelector('[data-maon-crosssell="cart"]')
+        || document.querySelector('.maon-crosssell-placeholder[data-position="cart"]');
+
+      if (placeholder) {
+        placeholder.appendChild(widget);
+      } else {
+        // Insert after main cart content, before footer
+        const cartForm = document.querySelector('form[action="/cart"]')
+          || document.querySelector('.cart-template__body')
+          || document.querySelector('.cart-form')
+          || document.querySelector('[data-cart-form]')
+          || document.querySelector('.cart');
+
+        if (cartForm) {
+          cartForm.parentNode.insertBefore(widget, cartForm.nextSibling);
+        } else {
+          // Fallback: append to main content
+          const main = document.querySelector('main') || document.querySelector('#MainContent');
+          if (main) main.appendChild(widget);
+        }
+      }
+
+      console.log('[Maon Crosssell] Widget sepet sayfasına eklendi');
+    } catch (e) {
+      console.warn('[Maon Crosssell] Sepet widget hatası:', e);
     }
   }
 
