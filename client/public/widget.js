@@ -116,15 +116,21 @@
 
   async function fetchRecommendations(shopifyProductId, position, limit) {
     try {
-      const params = new URLSearchParams({
-        input: JSON.stringify({ shopifyProductId, position, limit: limit || 4 })
+      // tRPC with superjson expects input wrapped in {"json": {...}}
+      const input = JSON.stringify({
+        json: { shopifyProductId: String(shopifyProductId), position: position, limit: limit || 4 }
       });
+      const params = new URLSearchParams({ input });
       const res = await fetch(`${API_URL}/api/trpc/widget.getRecommendations?${params}`, {
         headers: { 'Content-Type': 'application/json' }
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn('[Maon Crosssell] API yanıtı:', res.status, res.statusText);
+        return null;
+      }
       const json = await res.json();
-      return json.result?.data?.json || null;
+      // superjson response: result.data.json
+      return json.result?.data?.json || json.result?.data || null;
     } catch (e) {
       console.warn('[Maon Crosssell] Öneriler alınamadı:', e);
       return null;
@@ -299,7 +305,7 @@
     // Also handle AJAX cart drawer
     if (position === 'cart' || position === 'both') {
       document.addEventListener('cart:updated', initCartPage);
-      document.addEventListener('drawer:open', function(e) {
+      document.addEventListener('drawer:open', function (e) {
         if (e.detail?.drawer === 'cart' || e.detail?.id === 'cart-drawer') {
           setTimeout(initCartPage, 300);
         }
