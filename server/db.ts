@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, lte, ne, or, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import {
   CrosssellEvent,
   CrosssellRule,
@@ -24,7 +25,8 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      const client = postgres(process.env.DATABASE_URL);
+      _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -63,7 +65,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   if (!values.lastSignedIn) values.lastSignedIn = new Date();
   if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
 
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  await db.insert(users).values(values).onConflictDoUpdate({ target: users.openId, set: updateSet });
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -107,7 +109,8 @@ export async function upsertShopifyProduct(data: Omit<ShopifyProduct, "id" | "cr
   await db
     .insert(shopifyProducts)
     .values(data)
-    .onDuplicateKeyUpdate({
+    .onConflictDoUpdate({
+      target: shopifyProducts.shopifyId,
       set: {
         title: data.title,
         description: data.description,
@@ -413,7 +416,6 @@ export async function getDailyAnalytics(days = 30) {
     .where(gte(crosssellEvents.createdAt, since))
     .orderBy(crosssellEvents.createdAt);
 
-  // Group by day
   const byDay: Record<string, { date: string; impressions: number; clicks: number; purchases: number; revenue: number }> = {};
   for (const event of events) {
     const day = event.createdAt.toISOString().split("T")[0];
@@ -464,7 +466,7 @@ export async function setWidgetSetting(key: string, value: string) {
   await db
     .insert(widgetSettings)
     .values({ settingKey: key, settingValue: value })
-    .onDuplicateKeyUpdate({ set: { settingValue: value, updatedAt: new Date() } });
+    .onConflictDoUpdate({ target: widgetSettings.settingKey, set: { settingValue: value, updatedAt: new Date() } });
 }
 
 export async function getAllWidgetSettings(): Promise<Record<string, string>> {
