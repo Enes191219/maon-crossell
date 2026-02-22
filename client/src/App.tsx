@@ -17,7 +17,7 @@ import Home from "./pages/Home";
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={Dashboard} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/rules" component={Rules} />
       <Route path="/pairings" component={Pairings} />
