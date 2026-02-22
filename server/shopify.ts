@@ -16,6 +16,109 @@ interface ShopifyAdminProduct {
   images: Array<{ src: string; alt: string | null }>;
 }
 
+interface ShopifyCollection {
+  id: number;
+  handle: string;
+  title: string;
+}
+
+interface ShopifyCollect {
+  id: number;
+  product_id: number;
+  collection_id: number;
+}
+
+async function fetchCollectionMap(baseUrl: string, token: string): Promise<Map<number, string[]>> {
+  const productCollections = new Map<number, string[]>();
+
+  try {
+    // 1. Fetch all custom collections
+    const collections: ShopifyCollection[] = [];
+    let page_info: string | null = null;
+    let hasMore = true;
+
+    // Fetch custom collections
+    while (hasMore) {
+      const url = page_info
+        ? `${baseUrl}/custom_collections.json?limit=250&page_info=${page_info}`
+        : `${baseUrl}/custom_collections.json?limit=250`;
+      const res = await fetch(url, {
+        headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+      });
+      if (!res.ok) break;
+      const data = await res.json() as { custom_collections: ShopifyCollection[] };
+      collections.push(...(data.custom_collections || []));
+
+      // Check Link header for pagination
+      const linkHeader = res.headers.get("link");
+      if (linkHeader?.includes('rel="next"')) {
+        const match = linkHeader.match(/page_info=([^>&]*)/);
+        page_info = match?.[1] ?? null;
+      } else {
+        hasMore = false;
+      }
+      if ((data.custom_collections || []).length < 250) hasMore = false;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    // Fetch smart collections
+    hasMore = true;
+    page_info = null;
+    while (hasMore) {
+      const url = page_info
+        ? `${baseUrl}/smart_collections.json?limit=250&page_info=${page_info}`
+        : `${baseUrl}/smart_collections.json?limit=250`;
+      const res = await fetch(url, {
+        headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+      });
+      if (!res.ok) break;
+      const data = await res.json() as { smart_collections: ShopifyCollection[] };
+      collections.push(...(data.smart_collections || []));
+      if ((data.smart_collections || []).length < 250) hasMore = false;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    // Build collection ID → title map
+    const collectionTitleMap = new Map<number, string>();
+    for (const c of collections) {
+      collectionTitleMap.set(c.id, c.title);
+    }
+
+    // 2. Fetch collects (product-collection associations)
+    hasMore = true;
+    let sinceId = 0;
+    while (hasMore) {
+      const url = `${baseUrl}/collects.json?limit=250&since_id=${sinceId}`;
+      const res = await fetch(url, {
+        headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+      });
+      if (!res.ok) break;
+      const data = await res.json() as { collects: ShopifyCollect[] };
+      const collects = data.collects || [];
+
+      for (const collect of collects) {
+        const title = collectionTitleMap.get(collect.collection_id);
+        if (title) {
+          const existing = productCollections.get(collect.product_id) || [];
+          existing.push(title);
+          productCollections.set(collect.product_id, existing);
+        }
+      }
+
+      if (collects.length < 250) {
+        hasMore = false;
+      } else {
+        sinceId = collects[collects.length - 1].id;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  } catch (err) {
+    console.error("Koleksiyon bilgisi alınamadı:", err);
+  }
+
+  return productCollections;
+}
+
 export async function fetchAndSyncProducts(): Promise<{ synced: number; errors: string[] }> {
   const config = await getShopifyConfig();
 
@@ -29,6 +132,11 @@ export async function fetchAndSyncProducts(): Promise<{ synced: number; errors: 
   const domain = config.storeDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const apiVersion = "2024-01";
   const baseUrl = `https://${domain}/admin/api/${apiVersion}`;
+
+  // Fetch collection mapping first
+  console.log("[Shopify Sync] Koleksiyonlar alınıyor...");
+  const collectionMap = await fetchCollectionMap(baseUrl, token);
+  console.log(`[Shopify Sync] ${collectionMap.size} ürün-koleksiyon ilişkisi bulundu`);
 
   let synced = 0;
   const errors: string[] = [];
@@ -71,6 +179,7 @@ export async function fetchAndSyncProducts(): Promise<{ synced: number; errors: 
           const compareAtPriceMin = comparePrices.length > 0 ? Math.min(...comparePrices).toFixed(2) : null;
 
           const tags = product.tags ? product.tags.split(", ").filter(Boolean) : [];
+          const collections = collectionMap.get(product.id) || [];
           const productUrl = `https://${domain}/products/${product.handle}`;
           const imageUrl = product.image?.src || (product.images?.[0]?.src ?? null);
           const imageAlt = product.image?.alt || (product.images?.[0]?.alt ?? null);
@@ -83,7 +192,7 @@ export async function fetchAndSyncProducts(): Promise<{ synced: number; errors: 
             vendor: product.vendor || null,
             productType: product.product_type || null,
             tags,
-            collections: [], // Collections are fetched separately with Admin API
+            collections,
             priceMin,
             priceMax,
             compareAtPriceMin,
